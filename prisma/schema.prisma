@@ -1,0 +1,106 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+// A repository connected to Inspectra for review + insights.
+model Repository {
+  id            String       @id @default(cuid())
+  githubId      BigInt       @unique
+  owner         String
+  name          String
+  fullName      String       @unique // "owner/name"
+  defaultBranch String       @default("main")
+  installationId BigInt      // GitHub App installation that grants access
+  status        IngestStatus @default(PENDING)
+  lastIngestSha String?      // commit SHA of the last full ingest
+  chunkCount    Int          @default(0)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  chunks  CodeChunk[]
+  reviews Review[]
+
+  @@index([status])
+}
+
+// A chunk of source code with its embedding. Similarity search happens
+// over these via raw SQL (pgvector cosine distance) — see src/lib/retrieve.ts.
+model CodeChunk {
+  id        String   @id @default(cuid())
+  repoId    String
+  path      String
+  language  String?
+  startLine Int
+  endLine   Int
+  content   String   @db.Text
+  // 1536 dims = OpenAI text-embedding-3-small. Change if you swap models.
+  embedding Unsupported("vector(3072)")?
+  createdAt DateTime @default(now())
+
+  repo Repository @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@index([repoId])
+  @@index([repoId, path])
+}
+
+// One automated review run against a pull request.
+model Review {
+  id          String       @id @default(cuid())
+  repoId      String
+  prNumber    Int
+  headSha     String
+  status      ReviewStatus @default(QUEUED)
+  summary     String?      @db.Text
+  commentCount Int         @default(0)
+  error       String?      @db.Text
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  repo     Repository @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  comments ReviewComment[]
+
+  @@unique([repoId, prNumber, headSha])
+  @@index([repoId, prNumber])
+}
+
+model ReviewComment {
+  id       String   @id @default(cuid())
+  reviewId String
+  path     String
+  line     Int
+  severity Severity
+  body     String   @db.Text
+  posted   Boolean  @default(false)
+
+  review Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@index([reviewId])
+}
+
+enum IngestStatus {
+  PENDING
+  INGESTING
+  READY
+  FAILED
+}
+
+enum ReviewStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum Severity {
+  INFO
+  SUGGESTION
+  WARNING
+  BLOCKER
+}

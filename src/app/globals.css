@@ -1,0 +1,259 @@
+:root {
+  /* Surface — cool paper, not cream */
+  --bg: #fbfbfd;
+  --panel: #ffffff;
+  --ink: #16181d;
+  --ink-soft: #565b66;
+  --ink-faint: #8b909b;
+  --rule: #e7e8ec;
+  --rule-strong: #d3d5db;
+
+  /* Accent — deep indigo, used sparingly */
+  --accent: #3f3ae0;
+  --accent-weak: #ecebfb;
+
+  /* Severity IS the identity of a review tool */
+  --info: #5b6472;
+  --suggestion: #3f3ae0;
+  --warning: #b26a00;
+  --blocker: #c62828;
+
+  --info-bg: #eef0f3;
+  --suggestion-bg: #ecebfb;
+  --warning-bg: #fdf0dc;
+  --blocker-bg: #fbe6e6;
+
+  --status-ready: #1a7f4b;
+  --status-pending: #8b909b;
+  --status-failed: #c62828;
+
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.wrap {
+  max-width: 940px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* Masthead */
+.masthead {
+  border-bottom: 1px solid var(--rule);
+  padding: 40px 0 28px;
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+}
+
+.brand h1 {
+  font-family: var(--mono);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
+.brand .cursor {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.brand .tag {
+  font-size: 13px;
+  color: var(--ink-faint);
+}
+
+.lede {
+  margin: 12px 0 0;
+  max-width: 54ch;
+  color: var(--ink-soft);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+/* Repo cards — the left rule echoes a code-review margin */
+.repos {
+  padding: 32px 0 80px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--rule-strong);
+  border-radius: 8px;
+  padding: 20px 22px;
+  transition: border-color 0.15s ease;
+}
+
+.card.ready {
+  border-left-color: var(--status-ready);
+}
+.card.failed {
+  border-left-color: var(--status-failed);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.repo-name {
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 600;
+}
+.repo-name .owner {
+  color: var(--ink-faint);
+}
+
+.repo-meta {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.status {
+  font-family: var(--mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.status::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--status-pending);
+}
+.status.ready::before {
+  background: var(--status-ready);
+}
+.status.failed::before {
+  background: var(--status-failed);
+}
+.status.ingesting::before {
+  background: var(--warning);
+}
+
+.resync {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--accent);
+  background: var(--accent-weak);
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.resync:hover {
+  filter: brightness(0.97);
+}
+.resync:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Recent reviews */
+.reviews {
+  margin-top: 16px;
+  border-top: 1px dashed var(--rule);
+  padding-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.review-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.pr {
+  font-family: var(--mono);
+  color: var(--ink-soft);
+  flex-shrink: 0;
+}
+
+.review-summary {
+  color: var(--ink);
+  line-height: 1.4;
+}
+
+.chip {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 20px;
+  flex-shrink: 0;
+}
+.chip.completed {
+  color: var(--status-ready);
+  background: #e6f4ec;
+}
+.chip.running,
+.chip.queued {
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+.chip.failed {
+  color: var(--blocker);
+  background: var(--blocker-bg);
+}
+
+.empty {
+  color: var(--ink-faint);
+  font-size: 14px;
+  text-align: center;
+  padding: 60px 0;
+  border: 1px dashed var(--rule);
+  border-radius: 8px;
+}
+
+.loading {
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 40px 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+}

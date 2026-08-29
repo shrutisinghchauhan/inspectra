@@ -2,9 +2,9 @@
 
 # 🔍 Inspectra
 
-### AI-powered code review that understands your *whole* codebase — not just the diff.
+### AI code review that understands your *whole* codebase — not just the diff.
 
-Inspectra embeds an entire repository into a vector index, and when a pull request opens it retrieves the code **surrounding** your change and posts inline review comments — catching issues a line-by-line diff would miss, like a broken call site three files away.
+Inspectra embeds an entire repository into a vector index. When a pull request opens, it retrieves the code **surrounding** your change and posts inline review comments — catching bugs a line-by-line diff can't see, like a broken call site three files away.
 
 [![Next.js](https://img.shields.io/badge/Next.js-15-black?logo=next.js)](https://nextjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)](https://www.typescriptlang.org/)
@@ -18,74 +18,120 @@ Inspectra embeds an entire repository into a vector index, and when a pull reque
 
 ## The problem
 
-Traditional code review tools — and most "AI reviewers" — only look at the **diff**. But the most dangerous bugs aren't *in* the changed lines; they're in what the change **breaks elsewhere**: a renamed function still called in another module, a violated invariant, an inconsistent pattern, a missing null check that another file depended on.
+Most code-review tools — and most "AI reviewers" — only look at the **diff**. But the most dangerous bugs aren't *in* the changed lines; they're in what the change **breaks elsewhere**: a renamed function still called in another module, a violated invariant, a missing null check another file relied on.
 
-A reviewer who's read the whole codebase catches those. A diff-only tool can't.
+A reviewer who has read the whole codebase catches those. A diff-only tool can't.
 
 ## The idea
 
-**Give the AI reviewer the same context a senior engineer has** — the surrounding code — using Retrieval-Augmented Generation (RAG):
+Give the AI reviewer the same context a senior engineer has — the surrounding code — using **Retrieval-Augmented Generation (RAG)**:
 
-1. **Index** the repository once: split every source file into overlapping chunks, embed each with a language model, and store the vectors in Postgres (`pgvector`).
+1. **Index** the repo once: split every source file into overlapping chunks, embed each with a language model, and store the vectors in Postgres (`pgvector`).
 2. On every pull request, **retrieve** the code semantically closest to each changed file via vector similarity search.
 3. **Feed** the diff *plus* that retrieved context to the model and ask for structured, line-anchored review comments.
 4. **Post** them back to the PR as inline comments, tagged by severity.
 
 ---
 
-## Architecture
+## How it works
 
+Two phases: **index the repo once**, then **review every PR**. Both are driven entirely by GitHub webhook events — there are no buttons to click.
+
+```mermaid
+flowchart TD
+    subgraph gh["GitHub"]
+        A1["Repo installed"]
+        A2["Pull request opened"]
+    end
+
+    subgraph wh["/api/github/webhook"]
+        W1["Verify HMAC signature"]
+        W2["Respond 200 in ~40ms"]
+        W3["Do work in background"]
+    end
+
+    subgraph ingest["Phase 1 · Ingestion"]
+        I1["Fetch source files<br/>skip binaries / vendor / >100KB"]
+        I2["Chunk into 60-line windows<br/>12-line overlap"]
+        I3["Embed in batches of 64<br/>gemini-embedding-001 · 3072-dim"]
+    end
+
+    subgraph review["Phase 2 · Review Engine"]
+        R1["Embed each changed diff"]
+        R2["pgvector cosine search<br/>retrieve surrounding code"]
+        R3["generateObject + Zod schema<br/>gemini-2.0-flash"]
+        R4["Post inline PR comments<br/>tagged by severity"]
+    end
+
+    DB[("Postgres + pgvector<br/>CodeChunk · vector(3072)")]
+
+    A1 --> W1
+    A2 --> W1
+    W1 --> W2 --> W3
+    W3 -->|installation event| I1
+    I1 --> I2 --> I3 --> DB
+    W3 -->|pull_request event| R1
+    R1 --> R2
+    DB --> R2
+    R2 --> R3 --> R4
+    R4 -.inline comments.-> A2
 ```
-  ┌──────────────┐   PR opened / repo installed    ┌─────────────────────────┐
-  │    GitHub     │ ───────── webhook ────────────► │  /api/github/webhook     │
-  │   (App +      │                                 │  • verify HMAC signature │
-  │   webhooks)   │ ◄──── inline review comments ── │  • respond 200 instantly │
-  └──────────────┘                                  │  • do work in background │
-                                                    └───────────┬─────────────┘
-                                                                │
-                        ┌───────────────────────────────────────┼───────────────────────┐
-                        ▼                                       ▼                        ▼
-              ┌──────────────────┐                   ┌──────────────────┐      ┌──────────────────┐
-              │   INGESTION      │                   │    RETRIEVAL     │      │   REVIEW ENGINE  │
-              │  fetch source →  │                   │  embed query →   │      │  diff + context  │
-              │  chunk (overlap) │                   │  pgvector cosine │      │  → generateObject│
-              │  → embed → store │                   │  similarity      │      │  → typed comments│
-              └────────┬─────────┘                   └────────┬─────────┘      └────────┬─────────┘
-                       │                                       │                        │
-                       ▼                                       ▼                        ▼
-                 ┌───────────────────────────────────────────────────────────────────────────┐
-                 │                    Postgres + pgvector  (via Prisma)                        │
-                 │      Repository · CodeChunk[vector(3072)] · Review · ReviewComment          │
-                 └───────────────────────────────────────────────────────────────────────────┘
+
+### The pull-request lifecycle
+
+GitHub enforces a ~10-second webhook timeout, but embedding and reviewing take far longer. The handler verifies the signature, returns `200` almost immediately, and does the real work in the background.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant GH as GitHub
+    participant WH as Webhook Handler
+    participant BG as Background Job
+    participant PG as Postgres + pgvector
+    participant AI as Gemini
+
+    GH->>WH: pull_request.opened (HMAC-signed)
+    WH->>WH: verify signature
+    WH-->>GH: 200 OK (~40ms)
+    WH->>BG: hand off (non-blocking)
+    BG->>GH: list changed files
+    BG->>AI: embed each diff
+    BG->>PG: cosine search — embedding <=> query
+    PG-->>BG: top related chunks
+    BG->>AI: diff + retrieved context → generateObject
+    AI-->>BG: typed comments (path, line, severity, body)
+    BG->>GH: post inline review comments
 ```
 
-### Tech stack
+---
 
-| Layer            | Choice                                                             |
-| ---------------- | ----------------------------------------------------------------- |
-| **App**          | Next.js 15 (App Router), TypeScript, React 19                     |
-| **Database**     | PostgreSQL + **pgvector** extension, accessed via Prisma           |
-| **AI**           | Google **Gemini** (`gemini-embedding-001`, `gemini-2.0-flash`) via the Vercel AI SDK |
-| **GitHub**       | GitHub App + Octokit — webhooks in, inline reviews out            |
-| **Client**       | React Query dashboard with live ingestion/review status           |
+## Tech stack
+
+| Layer         | Choice                                                                      |
+| ------------- | --------------------------------------------------------------------------- |
+| **App**       | Next.js 15 (App Router), TypeScript, React 19                               |
+| **Database**  | PostgreSQL + **pgvector**, accessed via Prisma                              |
+| **AI**        | Google **Gemini** (`gemini-embedding-001`, `gemini-2.0-flash`) via the Vercel AI SDK |
+| **GitHub**    | GitHub App + Octokit — webhooks in, inline reviews out                      |
+| **Client**    | React Query dashboard with live ingestion / review status                   |
 
 ---
 
 ## Key engineering decisions
 
-These are the choices that make the project more than a wrapper around an API call:
+The choices that make this more than a wrapper around an API call:
 
-- **RAG over the whole repo, not just the diff.** The core differentiator. Vector similarity search surfaces related code so the model can reason about ripple effects, not just the changed lines.
+- **RAG over the whole repo, not just the diff.** The core differentiator. Vector similarity search surfaces related code so the model can reason about ripple effects, not only the changed lines.
 
-- **pgvector inside the primary database.** Rather than bolting on a separate vector DB (Pinecone, Weaviate), embeddings live in the same Postgres instance as the relational data — one datastore, transactional consistency, less operational surface. Cosine similarity runs through raw SQL using pgvector's `<=>` operator, since the ORM can't express it.
+- **pgvector inside the primary database.** Rather than bolting on a separate vector store (Pinecone, Weaviate), embeddings live in the same Postgres instance as the relational data — one datastore, transactional consistency, less operational surface. Cosine similarity runs through raw SQL using pgvector's `<=>` operator, since the ORM can't express it.
 
 - **Provider-agnostic AI layer.** Every model call goes through the Vercel AI SDK, so switching embedding/generation providers is a **one-file change** (`src/lib/ai.ts`). The project was built on OpenAI and migrated to Gemini with zero changes outside that file and the vector dimension.
 
-- **Non-blocking, event-driven webhooks.** GitHub enforces a ~10-second webhook timeout, but embedding a repository takes far longer. The handler **verifies the HMAC signature, responds `200` in ~40ms, and performs ingestion/review in the background** — the standard pattern for durable webhook processing.
+- **Non-blocking, event-driven webhooks.** The handler verifies the HMAC signature, responds `200` in ~40ms, and runs ingestion/review in the background — the standard pattern for durable webhook processing under GitHub's timeout.
 
 - **Structured LLM output.** Review comments are generated with `generateObject` against a Zod schema (`path`, `line`, `severity`, `body`), so the model returns typed, validated data instead of free text that needs parsing.
 
-- **Overlapping chunking.** Files are split into line-windows with overlap, so a function straddling a chunk boundary still lands whole inside at least one chunk — which materially improves retrieval quality.
+- **Overlapping chunking.** Files are split into 60-line windows with 12 lines of overlap, so a function straddling a chunk boundary still lands whole inside at least one chunk — which materially improves retrieval quality.
 
 ---
 
@@ -96,6 +142,7 @@ model CodeChunk {
   id        String   @id @default(cuid())
   repoId    String
   path      String
+  language  String?
   startLine Int
   endLine   Int
   content   String   @db.Text
@@ -104,35 +151,7 @@ model CodeChunk {
 }
 ```
 
-`Repository`, `Review`, and `ReviewComment` complete the schema — tracking ingestion status, per-PR review runs (idempotent per head commit), and severity-tagged comments.
-
----
-
-## Getting started
-
-**Prerequisites:** Node 20+, Docker, a Google AI Studio API key, and a GitHub App.
-
-```bash
-# 1. Database (Postgres + pgvector)
-docker run -d --name inspectra-pg -p 5432:5432 \
-  -e POSTGRES_PASSWORD=postgres pgvector/pgvector:pg16
-
-# 2. Install + configure
-npm install
-cp .env.example .env        # fill in GEMINI_API_KEY + GitHub App credentials
-
-# 3. Schema
-npm run db:push
-
-# 4. Run
-npm run dev
-```
-
-Expose the local server with a tunnel (e.g. `ngrok http 3000`), point your GitHub App's webhook at `<tunnel>/api/github/webhook`, install the App on a repo, and open a pull request.
-
-See [`.env.example`](./.env.example) for the full list of required environment variables.
-
-> **Note:** All secrets (`GEMINI_API_KEY`, the GitHub App private key, the webhook secret) live in `.env`, which is gitignored. Never commit real credentials.
+`Repository`, `Review`, and `ReviewComment` complete the schema — tracking ingestion status, per-PR review runs (idempotent per head commit), and severity-tagged comments (`INFO` · `SUGGESTION` · `WARNING` · `BLOCKER`).
 
 ---
 
@@ -158,12 +177,38 @@ src/
 
 ---
 
+## Getting started
+
+**Prerequisites:** Node 20+, Docker, a Google AI Studio API key, and a GitHub App.
+
+```bash
+# 1. Database (Postgres + pgvector)
+docker run -d --name inspectra-pg -p 5432:5432 \
+  -e POSTGRES_PASSWORD=postgres pgvector/pgvector:pg16
+
+# 2. Install + configure
+npm install
+cp .env.example .env        # fill in GEMINI_API_KEY + GitHub App credentials
+
+# 3. Schema
+npm run db:push
+
+# 4. Run
+npm run dev
+```
+
+Expose the local server with a tunnel (`ngrok http 3000`), point your GitHub App's webhook at `<tunnel>/api/github/webhook`, install the App on a repo, and open a pull request.
+
+> **Required env vars:** `GEMINI_API_KEY`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, and `DATABASE_URL`. All secrets live in `.env`, which is gitignored — never commit real credentials.
+
+---
+
 ## Roadmap
 
 - [ ] **AST-aware chunking** — split on function/class boundaries instead of line windows for sharper retrieval
 - [ ] **Repository insights** — hotspot detection and trend analysis over the chunk index + review history
-- [ ] **Durable job queue** — move background work to a queue (Inngest/QStash) for production-grade reliability at scale
-- [ ] **Evaluation harness** — a labeled PR benchmark to measure precision/recall of the reviews and ablate retrieval strategies
+- [ ] **Durable job queue** — move background work to a queue (Inngest / QStash) for production-grade reliability
+- [ ] **Evaluation harness** — a labeled PR benchmark to measure precision/recall and ablate retrieval strategies
 
 ---
 
